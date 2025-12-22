@@ -1,0 +1,43 @@
+name: my_flutter
+description: "Lost & Found Flutter App - Reuniting people with their belongings"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Icons
+  cupertino_icons: ^1.0.8
+
+  # Add these dependencies for Lost & Found functionality
+  shared_preferences: ^2.2.2  # Store user preferences/login state
+  http: ^1.1.0               # API calls for backend communication
+  provider: ^6.1.1           # State management
+  image_picker: ^1.0.7       # Camera/gallery for item photos
+  geolocator: ^10.1.0        # Location services
+  firebase_core: ^4.2.1
+  firebase_auth: ^6.1.2
+  firebase_storage: ^13.0.0
+  google_sign_in: ^7.1.1
+  cloud_firestore: ^6.1.0
+  permission_handler: ^11.0.0
+  algolia_helper_flutter: ^1.2.0
+  algoliasearch: ^1.35.0  # Add this for SearchClient
+  geocoding: ^3.0.0
+  google_maps_flutter: ^2.5.0
+  google_maps_cluster_manager: ^3.0.0
+  custom_info_window: ^1.0.1 # For custom map markers
+  url_launcher: ^6.1.9
+  firebase_analytics: ^12.0.4
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "818156194647",
+    "project_id": "lostandfound-e7a1d",
+    "storage_bucket": "lostandfound-e7a1d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:818156194647:android:b0a471bcedfadf3c9a8c12",
+        "android_client_info": {
+          "package_name": "com.example.lostandfound"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "818156194647-2ulheqbbibc8r6requitqkheuu645u44.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBICCBv5Ngk3-xx-s4A3n0YPrqzFz28RR4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "818156194647-2ulheqbbibc8r6requitqkheuu645u44.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "818156194647-tqc0omucuf3qj0bp5ua8vnumhfidmcka.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.myFlutter"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
