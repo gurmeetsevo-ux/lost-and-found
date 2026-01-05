@@ -3,7 +3,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:provider/provider.dart';
+import 'theme_provider.dart';
 import 'dart:io';
+import 'services/post_service.dart';
+import 'post_detail_screen.dart';
+import 'edit_post_screen.dart';
+import 'services/algolia_manual_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? user;
@@ -12,6 +18,7 @@ class ProfileScreen extends StatefulWidget {
   final Function(Map<String, dynamic>)? onPostSelected;
   final Widget bottomNav;
   final List<Map<String, dynamic>> allPosts;
+  final Function(Map<String, dynamic>)? onUpdateUser;
 
   const ProfileScreen({
     Key? key,
@@ -21,6 +28,7 @@ class ProfileScreen extends StatefulWidget {
     this.onPostSelected,
     required this.bottomNav,
     required this.allPosts,
+    this.onUpdateUser,
   }) : super(key: key);
 
   @override
@@ -30,7 +38,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   String activeSection = 'main';
   bool isAnonymous = false;
-  bool darkMode = false;
+  bool darkMode = false; // This will be initialized from ThemeProvider
   final ImagePicker _picker = ImagePicker();
   File? _profileImage;
   bool isLoading = false;
@@ -54,10 +62,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late TextEditingController phoneController;
   late TextEditingController locationController;
 
+  List<Map<String, dynamic>> _userPosts = []; // Store user's posts
+
   @override
   void initState() {
     super.initState();
     _initializeProfile();
+    _initializeTheme();
+    _loadUserPosts(); // Load user posts when screen initializes
+  }
+
+  // Load user posts from Firestore
+  Future<void> _loadUserPosts() async {
+    try {
+      User? currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        List<Map<String, dynamic>> posts = await PostService.fetchUserPosts(currentUser.uid);
+        setState(() {
+          _userPosts = posts;
+        });
+      }
+    } catch (e) {
+      print('Error loading user posts: $e');
+    }
+  }
+
+  void _initializeTheme() {
+    // Initialize darkMode based on ThemeProvider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+      setState(() {
+        darkMode = themeProvider.isDarkMode;
+      });
+    });
   }
 
   void _initializeProfile() async {
@@ -125,6 +162,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       print('Error loading user profile: $e');
       _showErrorMessage('Failed to load profile data');
+    }
+  }
+
+  // Save anonymous mode to Firebase
+  Future<void> _saveAnonymousModeToFirebase(bool value) async {
+    try {
+      User? currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        await _firestore
+            .collection('users')
+            .doc(currentUser.uid)
+            .update({'isAnonymous': value});
+            
+        // Update local state as well
+        setState(() {
+          userProfile['isAnonymous'] = value;
+        });
+        
+        // Update main app's user state if callback is provided
+        if (widget.onUpdateUser != null) {
+          // Create updated user data
+          Map<String, dynamic> updatedUser = {
+            ...?widget.user,
+            'isAnonymous': value,
+          };
+          widget.onUpdateUser!(updatedUser);
+        }
+        
+        // Show a subtle message if needed (optional)
+        // _showSuccessMessage('Anonymous mode ${value ? 'enabled' : 'disabled'}');
+      }
+    } catch (e) {
+      print('Error saving anonymous mode: $e');
+      _showErrorMessage('Failed to save anonymous mode setting');
     }
   }
 
@@ -325,6 +396,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       activeSection = sectionName;
     });
+    
+    // Reload user posts when navigating to the posts section to ensure latest data
+    if (sectionName == 'posts') {
+      _loadUserPosts();
+    }
   }
 
   // Helper methods for showing messages
@@ -357,29 +433,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // Get user posts
   List<Map<String, dynamic>> get userPosts {
-    return widget.allPosts.where((post) =>
-    post['user'] == userProfile['name']).toList().isNotEmpty
-        ? widget.allPosts.where((post) => post['user'] == userProfile['name']).toList()
-        : [
-      {
-        'id': 1,
-        'title': 'iPhone 15 Pro',
-        'type': 'lost',
-        'status': 'active',
-        'claims': 2,
-        'date': '2024-08-07',
-        'image': 'https://images.unsplash.com/photo-1592750475338-74b7b21085ab?w=200'
-      },
-      {
-        'id': 2,
-        'title': 'Black Wallet',
-        'type': 'found',
-        'status': 'claimed',
-        'claims': 1,
-        'date': '2024-08-05',
-        'image': 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=200'
-      }
-    ];
+    // Use the loaded user posts instead of filtering by name
+    return _userPosts;
   }
 
   // Get user claims
@@ -868,7 +923,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildQuickStats() {
     return Row(
       children: [
-        Expanded(child: _buildStatCard(userPosts.length.toString(), 'Posts')),
+        Expanded(child: _buildStatCard(_userPosts.length.toString(), 'Posts')),
         const SizedBox(width: 12),
         Expanded(child: _buildStatCard(userClaims.length.toString(), 'Claims')),
         const SizedBox(width: 12),
@@ -885,6 +940,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
             number,
@@ -893,6 +950,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontWeight: FontWeight.bold,
               color: Color(0xFF667eea),
             ),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 4),
           Text(
@@ -901,6 +959,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontSize: 12,
               color: Colors.grey[600],
             ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -938,8 +998,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               if (userProfile['isVerified'])
                 _buildBadgeItem(Icons.check_circle, 'Verified', 'Account verified', Colors.green),
 
-              if (userPosts.isNotEmpty)
-                _buildBadgeItem(Icons.description, 'Active Poster', '${userPosts.length}+ posts', Colors.blue),
+              if (_userPosts.isNotEmpty)
+                _buildBadgeItem(Icons.description, 'Active Poster', '${_userPosts.length}+ posts', Colors.blue),
 
               if (userClaims.where((c) => c['status'] == 'approved').isNotEmpty)
                 _buildBadgeItem(Icons.check_circle, 'Helper', 'Successful claims', Colors.orange),
@@ -1052,10 +1112,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           Switch(
             value: isAnonymous,
-            onChanged: (value) {
+            onChanged: (value) async {
               setState(() {
                 isAnonymous = value;
               });
+              
+              // Save the anonymous mode preference to Firebase
+              await _saveAnonymousModeToFirebase(value);
             },
             activeColor: const Color(0xFF667eea),
           ),
@@ -1071,7 +1134,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           'Account',
           [
             _buildMenuItem(Icons.person, 'Personal Info', 'Manage your profile details', () => navigateToSection('personal')),
-            _buildMenuItem(Icons.description, 'My Posts', '${userPosts.length} active posts', () => navigateToSection('posts')),
+            _buildMenuItem(Icons.description, 'My Posts', '${_userPosts.length} active posts', () => navigateToSection('posts')),
             _buildMenuItem(Icons.check_circle, 'My Claims', '${userClaims.length} claims submitted', () => navigateToSection('claims')),
           ],
         ),
@@ -1347,10 +1410,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildPostsStats() {
-    final activePosts = userPosts.where((p) => p['status'] == 'active').length;
-    final claimedPosts = userPosts.where((p) => p['status'] == 'claimed').length;
+    final activePosts = _userPosts.where((p) => p['status'] == 'active').length;
+    final claimedPosts = _userPosts.where((p) => p['status'] == 'claimed').length;
     int totalClaims = 0;
-    for (var post in userPosts) {
+    for (var post in _userPosts) {
       totalClaims += (post['claims'] as int?) ?? 0;
     }
 
@@ -1366,6 +1429,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildPostsList() {
+    if (_userPosts.isEmpty) {
+      return Column(
+        children: [
+          const Text(
+            'My Posts',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF2d3748),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Icon(Icons.inbox, size: 48, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  'No posts yet',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Your lost and found posts will appear here',
+                  style: TextStyle(
+                    color: Colors.grey[500],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1378,130 +1487,166 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        ...userPosts.map((post) => _buildPostCard(post)),
+        ..._userPosts.map((post) => _buildPostCard(post)),
       ],
     );
   }
 
   Widget _buildPostCard(Map<String, dynamic> post) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+    return InkWell(  // Make the entire card clickable
+      onTap: () {
+        // Navigate to PostDetailScreen when the card is tapped
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PostDetailScreen(post: post),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  image: post['image'] != null
-                      ? DecorationImage(
-                    image: NetworkImage(post['image']),
-                    fit: BoxFit.cover,
-                  )
-                      : null,
-                  color: post['image'] == null ? Colors.grey[200] : null,
-                ),
-                child: post['image'] == null
-                    ? const Icon(Icons.image, color: Colors.grey)
-                    : Stack(
-                  children: [
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: post['type'] == 'lost' ? Colors.red : Colors.green,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          post['type'],
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            post['title'] ?? '',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF2d3748),
-                            ),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    image: post['image'] != null
+                        ? DecorationImage(
+                      image: NetworkImage(post['image']),
+                      fit: BoxFit.cover,
+                    )
+                        : null,
+                    color: post['image'] == null ? Colors.grey[200] : null,
+                  ),
+                  child: post['image'] == null
+                      ? const Icon(Icons.image, color: Colors.grey)
+                      : Stack(
+                    children: [
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: post['status'] == 'active' ? Colors.green : Colors.orange,
-                            borderRadius: BorderRadius.circular(12),
+                            color: post['type'] == 'lost' ? Colors.red : Colors.green,
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            post['status'] ?? '',
+                            post['type'],
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 12,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              post['title'] ?? '',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF2d3748),
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: post['status'] == 'active' ? Colors.green : Colors.orange,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              post['status'] ?? '',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${post['date']} • ${post['claims'] ?? 0} claims',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _buildPostActionButton(Icons.visibility, 'View', () {
+                  // Prevent the view button from triggering navigation since the whole card is already clickable
+                  // We'll keep the same navigation for consistency with the card tap
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => PostDetailScreen(post: post),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${post['date']} • ${post['claims'] ?? 0} claims',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
+                  );
+                }),
+                const SizedBox(width: 8),
+                _buildPostActionButton(Icons.edit, 'Edit', () {
+                  // Navigate to EditPostScreen
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => EditPostScreen(
+                        post: post,
+                        postId: post['id'],
+                        onPostUpdated: (updatedPost) {
+                          // Refresh user posts after successful update
+                          _loadUserPosts();
+                        },
+                        onBack: () {
+                          Navigator.pop(context);
+                        },
+                        user: widget.user,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              _buildPostActionButton(Icons.visibility, 'View', () {
-                if (widget.onPostSelected != null) {
-                  widget.onPostSelected!(post);
-                  widget.onNavigateToView('detail');
-                }
-              }),
-              const SizedBox(width: 8),
-              _buildPostActionButton(Icons.edit, 'Edit', () {}),
-              const SizedBox(width: 8),
-              _buildPostActionButton(Icons.delete, 'Delete', () {}),
-            ],
-          ),
-        ],
+                  );
+                }),
+                const SizedBox(width: 8),
+                _buildPostActionButton(Icons.delete, 'Delete', () {
+                  _showDeleteConfirmationDialog(post);
+                }),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1785,11 +1930,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
       'Preferences',
       [
         _buildSettingDropdown('Language', 'App language', 'English'),
-        _buildSettingToggle(
-          'Dark Mode',
-          'Use dark theme',
-          darkMode,
-              (value) => setState(() => darkMode = value),
+        Consumer<ThemeProvider>(
+          builder: (context, themeProvider, child) {
+            return _buildSettingToggle(
+              'Dark Mode',
+              'Use dark theme',
+              themeProvider.isDarkMode,
+              (value) {
+                themeProvider.setDarkMode(value);
+              },
+            );
+          },
         ),
       ],
     );
@@ -1952,5 +2103,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
     );
+  }
+
+  // Add the delete confirmation dialog method
+  void _showDeleteConfirmationDialog(Map<String, dynamic> post) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Confirm Delete'),
+          content: Text('Are you sure you want to delete "${post['title']}"? This action cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(), // Cancel
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _deletePost(post);
+                Navigator.of(context).pop(); // Close dialog
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Delete post method that removes from both Firestore and Algolia
+  Future<void> _deletePost(Map<String, dynamic> post) async {
+    try {
+      String? postId = post['id'];
+      if (postId != null) {
+        // Show loading indicator
+        setState(() {
+          // Create a copy of user posts with the deleted post marked as being deleted
+          _userPosts.removeWhere((p) => p['id'] == postId);
+        });
+
+        // Delete from both Firestore and Algolia
+        await AlgoliaManualService.deletePost(postId);
+
+        // Show success message
+        _showSuccessMessage('Post deleted successfully!');
+
+        // Refresh the posts list
+        await _loadUserPosts();
+      } else {
+        _showErrorMessage('Error: Post ID not found');
+      }
+    } catch (e) {
+      print('Error deleting post: $e');
+      _showErrorMessage('Failed to delete post. Please try again.');
+      // Reload posts in case of error to restore the UI
+      await _loadUserPosts();
+    }
   }
 }

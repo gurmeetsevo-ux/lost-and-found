@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import 'welcome_screen.dart';
 import 'signup_screen.dart';
 import 'login_screen.dart';
@@ -11,6 +13,7 @@ import 'add_post_screen.dart';
 import 'services/algolia_manual_service.dart';
 import 'post_detail_screen.dart';
 import 'map_screen.dart';
+import 'theme_provider.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -27,20 +30,23 @@ void main() async {
 }
 
 
-
 class LostAndFoundApp extends StatelessWidget {
   const LostAndFoundApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Lost & Found',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        fontFamily: 'SF Pro Display',
+    return ChangeNotifierProvider(
+      create: (context) => ThemeProvider(),
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, child) {
+          return MaterialApp(
+            title: 'Lost & Found',
+            theme: themeProvider.themeData,
+            home: const AppNavigator(),
+            debugShowCheckedModeBanner: false,
+          );
+        },
       ),
-      home: const AppNavigator(),
-      debugShowCheckedModeBanner: false,
     );
   }
 }
@@ -65,10 +71,45 @@ class _AppNavigatorState extends State<AppNavigator> {
   bool _showFilterModal = false;
   Map<String, dynamic> _currentFilters = {};
 
-  // Categories list
-  final List<String> categories = [
-    'all', 'Electronics', 'Wallet/Bag', 'Keys', 'Documents', 'Clothing', 'Other'
-  ];
+  // Categories list - will be fetched from database
+  List<String> categories = ['all']; // Start with 'all' as default
+  bool _isLoadingCategories = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Fetch categories from database when app initializes
+    _fetchCategories();
+  }
+
+  // Add this method to fetch categories from Algolia
+  Future<void> _fetchCategories() async {
+    try {
+      print('🗂️ MAIN: Fetching categories from Algolia...');
+      final algoliaCategories = await AlgoliaManualService.fetchCategoriesFromIndex();
+      
+      // Remove 'All' and 'all' from algoliaCategories and add our 'all' at the beginning
+      final filteredCategories = algoliaCategories
+          .where((category) => category.toLowerCase() != 'all')
+          .toList();
+      
+      setState(() {
+        categories = ['all', ...filteredCategories];
+        _isLoadingCategories = false;
+      });
+      
+      print('🗂️ MAIN: Successfully loaded ${categories.length} categories');
+    } catch (e) {
+      print('❌ MAIN: Failed to fetch categories: $e');
+      setState(() {
+        // Fallback to default categories
+        categories = [
+          'all', 'Electronics', 'Wallet/Bag', 'Keys', 'Documents', 'Clothing', 'Other'
+        ];
+        _isLoadingCategories = false;
+      });
+    }
+  }
 
   // ✅ Mock data for posts
   List<Map<String, dynamic>> allPosts = [
@@ -132,43 +173,74 @@ class _AppNavigatorState extends State<AppNavigator> {
     });
   }
 
-  void login(Map<String, dynamic> userData, [String? token]) {
+  void login(Map<String, dynamic> userData, [String? token]) async {
     print('🎯 === MAIN LOGIN CALLBACK RECEIVED ===');
     print('🎯 userData: $userData');
     print('🎯 token: ${token != null ? 'present' : 'null'}');
-
+    
     // ✅ SIMPLIFIED VALIDATION: Check basic requirements
     if (userData.isEmpty) {
       print('❌ Login failed: User data is empty');
       return;
     }
-
+    
     // ✅ DIRECT UID CHECK: Get UID directly from userData
     final String? uid = userData['uid'];
     final String? email = userData['email'];
-
+    
     print('🔍 Direct field check:');
     print('🔍 uid: $uid');
     print('🔍 email: $email');
-
+    
     if (uid == null || uid.isEmpty) {
       print('❌ Login failed: UID is null or empty');
       return;
     }
-
+    
     if (email == null || email.isEmpty) {
       print('❌ Login failed: Email is null or empty');
       return;
     }
-
+    
+    // ✅ FETCH LATEST USER DATA FROM FIRESTORE TO GET UPDATED SETTINGS
+    Map<String, dynamic>? firestoreUserData = await _fetchUserFromFirestore(uid);
+    
+    // ✅ MERGE USER DATA: Use Firestore data as primary, fallback to original data
+    Map<String, dynamic> finalUserData = {
+      ...userData, // Start with original data
+      if (firestoreUserData != null) ...firestoreUserData, // Override with Firestore data
+    };
+    
     // ✅ SUCCESS: Update app state
     setState(() {
-      user = userData;
+      user = finalUserData;
       currentView = 'home';
     });
-
+    
     print('✅ Login successful for user: $email (UID: $uid)');
+    print('✅ User data merged with Firestore: $finalUserData');
     print('✅ Navigated to: $currentView');
+  }
+  
+  // Helper method to fetch user data from Firestore
+  Future<Map<String, dynamic>?> _fetchUserFromFirestore(String uid) async {
+    try {
+      DocumentSnapshot doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      
+      if (doc.exists) {
+        Map<String, dynamic>? data = doc.data() as Map<String, dynamic>?;
+        if (data != null) {
+          // Ensure we have essential fields from the original user data
+          return data;
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error fetching user from Firestore: $e');
+    }
+    return null;
   }
 
   // ✅ NEW: Handle adding new posts
@@ -228,7 +300,7 @@ class _AppNavigatorState extends State<AppNavigator> {
     }
   }
 
-// Add this method to your _AppNavigatorState class
+  // Add this method to your _AppNavigatorState class
   void _showPostDetailModal(Map<String, dynamic> post) {
     print('📱 MAIN: Opening full-screen post detail for: ${post['title']}');
 
@@ -241,7 +313,7 @@ class _AppNavigatorState extends State<AppNavigator> {
     );
   }
 
-// Add these helper methods to handle actions
+  // Add these helper methods to handle actions
   void _handleContactOwner(Map<String, dynamic> post) {
     // You can implement:
     // 1. Open messaging/chat screen
@@ -788,47 +860,56 @@ class _AppNavigatorState extends State<AppNavigator> {
           ),
         ),
         const SizedBox(height: 16),
-        SizedBox(
-          height: 40,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: categories.take(5).length,
-            itemBuilder: (context, index) {
-              final category = categories[index];
-              final isActive = selectedCategory == category;
+        // Show loading indicator while fetching categories
+        if (_isLoadingCategories)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: CircularProgressIndicator(),
+            ),
+          )
+        else
+          SizedBox(
+            height: 40,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: categories.take(5).length,
+              itemBuilder: (context, index) {
+                final category = categories[index];
+                final isActive = selectedCategory == category;
 
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: GestureDetector(
-                  onTap: () {
-                    setState(() => selectedCategory = category);
-                    setCurrentView('search');
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isActive
-                          ? const Color(0xFF667eea)
-                          : const Color(0xFF667eea).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: const Color(0xFF667eea).withOpacity(0.3),
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() => selectedCategory = category);
+                      setCurrentView('search');
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFF667eea)
+                            : const Color(0xFF667eea).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xFF667eea).withOpacity(0.3),
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      category == 'all' ? 'All Items' : category,
-                      style: TextStyle(
-                        color: isActive ? Colors.white : const Color(0xFF667eea),
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
+                      child: Text(
+                        category == 'all' ? 'All Items' : category,
+                        style: TextStyle(
+                          color: isActive ? Colors.white : const Color(0xFF667eea),
+                          fontWeight: FontWeight.w500,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
-        ),
         const SizedBox(height: 24),
         Container(
           padding: const EdgeInsets.all(24),
@@ -932,6 +1013,7 @@ class _AppNavigatorState extends State<AppNavigator> {
         },
         onAddPost: handleAddPost,
         onBack: () => setCurrentView('home'),
+        user: user,
       );
     }
 
@@ -975,6 +1057,11 @@ class _AppNavigatorState extends State<AppNavigator> {
         onNavigateToView: setCurrentView,
         onPostSelected: (post) {
           print('Selected post: $post');
+        },
+        onUpdateUser: (updatedUser) {
+          setState(() {
+            user = updatedUser;
+          });
         },
         bottomNav: buildBottomNav(),
         allPosts: allPosts,

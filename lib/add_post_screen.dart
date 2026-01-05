@@ -6,6 +6,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'services/algolia_manual_service.dart';
+import 'location_picker_screen.dart';
 
 
 class AddPostScreen extends StatefulWidget {
@@ -41,6 +42,44 @@ class _AddPostScreenState extends State<AddPostScreen>
   final picker = ImagePicker();
   bool _isSubmitting = false;
   bool _isGettingLocation = false;
+
+  // Check user's anonymous mode setting and return appropriate name
+  String _getUserNameForPost() {
+    // If no user is logged in, return Anonymous User
+    if (widget.user == null || widget.user!['uid'] == null) {
+      return 'Anonymous User';
+    }
+    
+    // Check if user has enabled anonymous mode in their profile
+    bool isAnonymousModeEnabled = widget.user?['isAnonymous'] ?? false;
+    
+    // If anonymous mode is enabled, return Anonymous User; otherwise return actual name
+    if (isAnonymousModeEnabled) {
+      return 'Anonymous User';
+    } else {
+      return widget.user?['name'] ?? 'User';
+    }
+  }
+
+  // Method to fetch user's anonymous mode setting from Firebase
+  Future<bool> _getUserAnonymousMode() async {
+    try {
+      if (widget.user != null && widget.user!['uid'] != null) {
+        DocumentSnapshot doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(widget.user!['uid'])
+            .get();
+
+        if (doc.exists) {
+          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+          return data['isAnonymous'] ?? false;
+        }
+      }
+    } catch (e) {
+      print('Error fetching user anonymous mode: $e');
+    }
+    return false; // Default to false if there's an error
+  }
 
   // Form fields
   Map<String, dynamic> newPost = {
@@ -174,6 +213,7 @@ class _AddPostScreenState extends State<AddPostScreen>
         setState(() {
           _locationController.text = address; // Fill the text field
           newPost['location'] = address;      // Update the form data
+          newPost['coordinates'] = null;      // Clear any manually set coordinates
         });
 
         // Show success message
@@ -223,6 +263,12 @@ class _AddPostScreenState extends State<AddPostScreen>
     });
 
     try {
+      // Don't clear coordinates if they were set from map picker
+      // Only clear if we're intentionally getting current location
+      // setState(() {
+      //   newPost['coordinates'] = null;
+      // });
+      
       // Get current position with high accuracy
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -290,6 +336,55 @@ class _AddPostScreenState extends State<AddPostScreen>
         ),
       ),
     );
+  }
+
+  // New method to open location picker
+  Future<void> _openLocationPicker() async {
+    try {
+      final result = await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => LocationPickerScreen(
+            initialLatitude: null,
+            initialLongitude: null,
+            initialAddress: _locationController.text,
+          ),
+        ),
+      );
+
+      if (result != null && result is Map<String, dynamic>) {
+        setState(() {
+          _locationController.text = result['address'];
+          newPost['location'] = result['address'];
+          // Store coordinates separately for later use
+          newPost['coordinates'] = {
+            'latitude': result['latitude'],
+            'longitude': result['longitude'],
+          };
+        });
+
+        // Show success message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.location_on, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Location selected: ${result['address'].length > 50 ? result['address'].substring(0, 50) + '...' : result['address']}',
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Location Picker Error: $e');
+      _showLocationError('Failed to open location picker. Please try again.');
+    }
   }
 
   Future<void> _choosePhoto() async {
@@ -431,13 +526,53 @@ class _AddPostScreenState extends State<AddPostScreen>
 
     try {
       // 🎯 CAPTURE ENHANCED LOCATION DATA
-      Map<String, dynamic>? locationData = await _captureEnhancedLocationData();
+      Map<String, dynamic>? locationData;
+      
+      // Check if the location was selected from the map picker
+      if (newPost['coordinates'] != null) {
+        // Use the coordinates selected from the map picker
+        locationData = {
+          'address': _locationController.text,
+          'coordinates': newPost['coordinates'],
+          'accuracy': 10.0, // Set to a reasonable default for manually selected locations
+          'timestamp': FieldValue.serverTimestamp(),
+        };
+      } else {
+        // Use current location if no map picker coordinates available
+        locationData = await _captureEnhancedLocationData();
+        if (locationData == null) {
+          locationData = {
+            'address': _locationController.text,
+            'coordinates': null,
+            'accuracy': null,
+            'timestamp': FieldValue.serverTimestamp(),
+          };
+        }
+      }
+      
+      // Ensure coordinates are properly formatted for map display
+      if (locationData != null && locationData['coordinates'] != null) {
+        // Make sure coordinates are in the expected format: {latitude: ..., longitude: ...}
+        if (locationData['coordinates'] is Map<String, dynamic>) {
+          // Already in correct format
+        } else if (locationData['coordinates'] is Map) {
+          // Convert to String keys format if needed
+          Map originalCoords = locationData['coordinates'];
+          locationData['coordinates'] = {
+            'latitude': originalCoords['latitude'],
+            'longitude': originalCoords['longitude'],
+          };
+        }
+      }
 
       String? imageUrl;
       if (_image != null) {
         imageUrl = await _uploadImage();
       }
 
+      // Check user's anonymous mode setting from Firebase
+      bool userAnonymousMode = await _getUserAnonymousMode();
+      
       // Prepare enhanced post data
       Map<String, dynamic> postData = {
         'title': newPost['title'],
@@ -462,7 +597,7 @@ class _AddPostScreenState extends State<AddPostScreen>
         'updatedAt': FieldValue.serverTimestamp(),
         'userId': widget.user?['uid'] ?? 'anonymous',
         'userEmail': widget.user?['email'] ?? 'anonymous@example.com',
-        'userName': widget.user?['name'] ?? 'Anonymous User',
+        'userName': userAnonymousMode ? 'Anonymous User' : (widget.user?['name'] ?? 'User'),
         'isActive': true,
         'claims': 0,
 
@@ -728,6 +863,7 @@ class _AddPostScreenState extends State<AddPostScreen>
                   setState(() {
                     _locationController.clear();
                     newPost['location'] = '';
+                    newPost['coordinates'] = null;
                   });
                 },
               )
@@ -741,6 +877,8 @@ class _AddPostScreenState extends State<AddPostScreen>
             onChanged: (value) {
               setState(() {
                 newPost['location'] = value;
+                // Clear coordinates when user manually edits location
+                newPost['coordinates'] = null;
               });
             },
             validator: (v) => v == null || v.isEmpty ? 'This field is required' : null,
@@ -749,64 +887,111 @@ class _AddPostScreenState extends State<AddPostScreen>
 
         SizedBox(height: 10),
 
-        // Use Current Location Button with enhanced UI
-        GestureDetector(
-          onTap: _isGettingLocation ? null : _useCurrentLocation,
-          child: Container(
-            width: double.infinity,
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: _isGettingLocation
-                  ? Colors.grey[200]
-                  : Color(0xFF667eea).withOpacity(0.1),
-              border: Border.all(
-                color: _isGettingLocation
-                    ? Colors.grey[300]!
-                    : Color(0xFF667eea).withOpacity(0.3),
-                width: 2,
+        // Buttons for location options
+        Row(
+          children: [
+            // Use Current Location Button
+            Expanded(
+              child: GestureDetector(
+                onTap: _isGettingLocation ? null : _useCurrentLocation,
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _isGettingLocation
+                        ? Colors.grey[200]
+                        : Color(0xFF667eea).withOpacity(0.1),
+                    border: Border.all(
+                      color: _isGettingLocation
+                          ? Colors.grey[300]!
+                          : Color(0xFF667eea).withOpacity(0.3),
+                      width: 2,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_isGettingLocation) ...[
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF667eea)),
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text(
+                          'Detecting...',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF667eea),
+                          ),
+                        ),
+                      ] else ...[
+                        Icon(
+                          Icons.my_location,
+                          size: 20,
+                          color: Color(0xFF667eea),
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Current',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF667eea),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (_isGettingLocation) ...[
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF667eea)),
+            SizedBox(width: 10),
+            // Pick Location from Map Button
+            Expanded(
+              child: GestureDetector(
+                onTap: _isGettingLocation ? null : _openLocationPicker,
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _isGettingLocation
+                        ? Colors.grey[200]
+                        : Color(0xFF764ba2).withOpacity(0.1),
+                    border: Border.all(
+                      color: _isGettingLocation
+                          ? Colors.grey[300]!
+                          : Color(0xFF764ba2).withOpacity(0.3),
+                      width: 2,
                     ),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  SizedBox(width: 12),
-                  Text(
-                    'Detecting Location...',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF667eea),
-                    ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.map,
+                        size: 20,
+                        color: Color(0xFF764ba2),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'Pick on Map',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF764ba2),
+                        ),
+                      ),
+                    ],
                   ),
-                ] else ...[
-                  Icon(
-                    Icons.my_location,
-                    size: 20,
-                    color: Color(0xFF667eea),
-                  ),
-                  SizedBox(width: 8),
-                  Text(
-                    'Use Current Location',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF667eea),
-                    ),
-                  ),
-                ],
-              ],
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ],
     );

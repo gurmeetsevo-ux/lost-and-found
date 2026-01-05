@@ -251,16 +251,9 @@ class _SignupScreenState extends State<SignupScreen>
           children: [
             // Background pattern
             Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  image: DecorationImage(
-                    image: const NetworkImage(
-                        'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.05"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.05"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.03"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>'
-                    ),
-                    repeat: ImageRepeat.repeat,
-                    opacity: 0.3,
-                  ),
-                ),
+              child: CustomPaint(
+                painter: GrainPatternPainter(),
+                child: Container(),
               ),
             ),
             // Main content
@@ -352,7 +345,7 @@ class _SignupScreenState extends State<SignupScreen>
                         color: Colors.white,
                         shadows: [
                           Shadow(
-                            color: Colors.black26,
+                            color: Color(0x4D000000), // 0.3 opacity of black
                             offset: Offset(0, 2),
                             blurRadius: 10,
                           ),
@@ -408,7 +401,7 @@ class _SignupScreenState extends State<SignupScreen>
                       color: Colors.white,
                       shadows: [
                         Shadow(
-                          color: Colors.black26,
+                          color: Color(0x4D000000), // 0.3 opacity of black
                           offset: Offset(0, 2),
                           blurRadius: 10,
                         ),
@@ -501,7 +494,7 @@ class _SignupScreenState extends State<SignupScreen>
                 Text(
                   'Already have an account? ',
                   style: TextStyle(
-                    color: Colors.grey[600],
+                    color: Color(0xFF718096),
                     fontSize: 14,
                   ),
                 ),
@@ -576,9 +569,9 @@ class _SignupScreenState extends State<SignupScreen>
             ]
                 : [
               BoxShadow(
-                color: const Color(0xFF667eea).withOpacity(0.1),
+                color: Color(0xFF667eea).withOpacity(0.1),
                 blurRadius: 4,
-                offset: const Offset(0, 2),
+                offset: Offset(0, 2),
               ),
             ],
           ),
@@ -589,7 +582,7 @@ class _SignupScreenState extends State<SignupScreen>
             onChanged: (value) => _handleInputChange(fieldKey, value),
             decoration: InputDecoration(
               hintText: placeholder,
-              hintStyle: const TextStyle(color: Color(0xFFa0aec0)),
+              hintStyle: TextStyle(color: const Color(0xFFa0aec0)),
               prefixIcon: Icon(icon, color: const Color(0xFF718096)),
               suffixIcon: isPassword
                   ? Container(
@@ -628,7 +621,7 @@ class _SignupScreenState extends State<SignupScreen>
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                  color: hasError ? const Color(0xFFe53e3e) : const Color(0xFF667eea),
+                  color: hasError ? Color(0xFFe53e3e) : Color(0xFF667eea),
                   width: 2,
                 ),
               ),
@@ -688,7 +681,7 @@ class _SignupScreenState extends State<SignupScreen>
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF2d3748),
+                    color: const Color(0xFF2d3748),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -696,7 +689,7 @@ class _SignupScreenState extends State<SignupScreen>
                   'Hide your personal details by default for privacy',
                   style: TextStyle(
                     fontSize: 14,
-                    color: const Color(0xFF4a5568),
+                    color: const Color(0xFF718096),
                     height: 1.4,
                   ),
                 ),
@@ -720,7 +713,7 @@ class _SignupScreenState extends State<SignupScreen>
                 boxShadow: _isAnonymous
                     ? [
                   BoxShadow(
-                    color: const Color(0xFF667eea).withOpacity(0.3),
+                    color: Color(0xFF667eea).withOpacity(0.3),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -816,4 +809,40 @@ class _SignupScreenState extends State<SignupScreen>
       ),
     );
   }
+}
+
+class GrainPatternPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white.withOpacity(0.05);
+
+    // Draw the grain pattern
+    final density = 8; // Number of circles per row/column
+    final spacing = size.width / density;
+
+    for (int i = 0; i < density; i++) {
+      for (int j = 0; j < density; j++) {
+        // Draw larger circles at (25%, 25%) and (75%, 75%) positions
+        if ((i == 2 && j == 2) || (i == 6 && j == 6)) {
+          canvas.drawCircle(
+            Offset(spacing * i + spacing / 2, spacing * j + spacing / 2),
+            2,
+            paint..color = Colors.white.withOpacity(0.05),
+          );
+        } else {
+          // Draw smaller circles
+          canvas.drawCircle(
+            Offset(spacing * i + spacing / 2, spacing * j + spacing / 2),
+            1,
+            paint..color = Colors.white.withOpacity(0.03),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

@@ -313,6 +313,88 @@ class AlgoliaManualService {
     }
   }
 
+  // Update an existing post in both Firestore and Algolia
+  static Future<void> updatePost(String postId, Map<String, dynamic> updatedData) async {
+    print('\n📝 ALGOLIA UPDATE: ====== UPDATING POST ======');
+    print('   🆔 Post ID: $postId');
+    print('   🕒 Request Time: ${DateTime.now().toString()}');
+    print('   📄 Updated Data: $updatedData');
+
+    if (!_initialized) {
+      print('⚠️  ALGOLIA UPDATE: Initializing service...');
+      initialize();
+    }
+
+    try {
+      // STEP 1: UPDATE IN FIRESTORE
+      print('📤 ALGOLIA UPDATE: Step 1 - Updating in Firestore...');
+      await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(postId)
+          .update({
+        ...updatedData,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ Updated in Firestore: $postId');
+
+      // STEP 2: PREPARE ALGOLIA DATA
+      print('🔧 ALGOLIA UPDATE: Preparing Algolia data...');
+      Map<String, dynamic> algoliaData = Map.from(updatedData);
+      algoliaData['objectID'] = postId;
+
+      // Remove Firestore-specific fields that can cause issues
+      algoliaData.remove('createdAt');
+      algoliaData.remove('updatedAt');
+
+      // Convert Firestore timestamp → ISO string and filter out FieldValue objects
+      algoliaData.removeWhere((key, value) {
+        if (value is FieldValue) {
+          print('   🗑️  Removed FieldValue field: $key');
+          return true;
+        }
+        return false;
+      });
+
+      algoliaData.forEach((key, value) {
+        if (value is Timestamp) {
+          algoliaData[key] = value.toDate().toIso8601String();
+          print('   🔄 Converted Timestamp Field: $key');
+        }
+      });
+
+      // Convert nested coordinates if needed and flatten location data
+      if (algoliaData['location'] != null && algoliaData['location'] is Map) {
+        Map<String, dynamic> locationData = algoliaData['location'];
+        
+        // Extract address as a string for Algolia
+        algoliaData['location'] = locationData['address'] ?? '';
+        
+        // Extract coordinates for geosearch
+        if (locationData['coordinates'] != null && locationData['coordinates'] is Map) {
+          algoliaData['lat'] = locationData['coordinates']['latitude'];
+          algoliaData['lng'] = locationData['coordinates']['longitude'];
+        }
+      }
+
+      print('📊 Final Algolia Data:');
+      algoliaData.forEach((k, v) => print('   🔹 $k → $v'));
+
+      // STEP 3: UPDATE IN ALGOLIA INDEX
+      print('🚀 ALGOLIA UPDATE: Updating in Algolia...');
+      await _adminClient.saveObject(
+        indexName: AlgoliaConfig.indexName,
+        body: algoliaData,
+      );
+
+      print('✅ ALGOLIA UPDATE: Successfully updated in Algolia with objectID: $postId');
+
+    } catch (e, stackTrace) {
+      print('❌ ALGOLIA UPDATE FAILED: $e');
+      print('📛 STACKTRACE: $stackTrace');
+      throw e;
+    }
+  }
 
   // 🎯 UPDATED: Enhanced filtering with dynamic search
   static Future<List<Map<String, dynamic>>> searchWithFilters({
@@ -340,12 +422,13 @@ class AlgoliaManualService {
         print('   ➕ Added category filter: category:"$category"');
       }
 
+      // Handle Lost/Found tags properly
       if (tags != null && tags.isNotEmpty) {
         List<String> typeFilters = [];
         for (String tag in tags) {
-          if (tag == 'Lost') {
+          if (tag.toLowerCase() == 'lost') {
             typeFilters.add('type:"lost"');
-          } else if (tag == 'Found') {
+          } else if (tag.toLowerCase() == 'found') {
             typeFilters.add('type:"found"');
           }
         }
@@ -426,5 +509,43 @@ class AlgoliaManualService {
 
     print('✅ ALGOLIA FORMAT: Formatting complete');
     return formattedResults;
+  }
+
+  // Delete a post from both Firestore and Algolia
+  static Future<void> deletePost(String postId) async {
+    print('\n🗑️ ALGOLIA DELETE: ====== DELETING POST ======');
+    print('   🆔 Post ID: $postId');
+    print('   🕒 Request Time: ${DateTime.now().toString()}');
+
+    if (!_initialized) {
+      print('⚠️  ALGOLIA DELETE: Initializing service...');
+      initialize();
+    }
+
+    try {
+      // STEP 1: DELETE FROM ALGOLIA INDEX FIRST
+      print('🗑️ ALGOLIA DELETE: Step 1 - Deleting from Algolia...');
+      await _adminClient.deleteObject(
+        indexName: AlgoliaConfig.indexName,
+        objectID: postId,
+      );
+
+      print('✅ Deleted from Algolia: $postId');
+
+      // STEP 2: DELETE FROM FIRESTORE
+      print('🗑️ ALGOLIA DELETE: Step 2 - Deleting from Firestore...');
+      await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(postId)
+          .delete();
+
+      print('✅ Deleted from Firestore: $postId');
+      print('✅ ALGOLIA DELETE: Successfully deleted post from both Firestore and Algolia');
+
+    } catch (e, stackTrace) {
+      print('❌ ALGOLIA DELETE FAILED: $e');
+      print('📛 STACKTRACE: $stackTrace');
+      throw e;
+    }
   }
 }

@@ -314,8 +314,8 @@ class PostDetailScreen extends StatelessWidget {
         const SizedBox(height: 12),
 
         // 🗺️ CLICKABLE LOCATION CARD
-        if (post['location'] != null && post['location'].toString().isNotEmpty)
-          _buildClickableLocationCard(post['location'].toString()),
+        if (post['location'] != null && _getLocationString(post['location']).isNotEmpty)
+          _buildClickableLocationCard(_getLocationString(post['location'])),
 
         // Date card
         if (post['date'] != null && post['date'].toString().isNotEmpty)
@@ -650,5 +650,26 @@ class PostDetailScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  // Helper method to extract location string from location data
+  String _getLocationString(dynamic location) {
+    if (location == null) return '';
+    
+    if (location is String) {
+      return location;
+    } else if (location is Map) {
+      // Handle the case where location is an object with address and coordinates
+      if (location.containsKey('address')) {
+        return location['address'].toString();
+      } else {
+        // If no address key, try to return the first string value
+        for (var value in location.values) {
+          if (value is String) return value;
+        }
+      }
+    }
+    
+    return location.toString();
   }
 }

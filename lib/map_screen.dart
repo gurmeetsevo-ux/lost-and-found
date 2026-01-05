@@ -5,17 +5,21 @@ import 'package:geolocator/geolocator.dart';
 import 'package:custom_info_window/custom_info_window.dart';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'post_detail_screen.dart';
+import 'services/post_service.dart'; // Add this import
 
 class MapScreen extends StatefulWidget {
   final VoidCallback onNavigateBack;
   final Widget bottomNav;
   final Function(Map<String, dynamic>) onItemSelected;
+  final VoidCallback? onRefresh;
 
   const MapScreen({
     Key? key,
     required this.onNavigateBack,
     required this.bottomNav,
     required this.onItemSelected,
+    this.onRefresh,
   }) : super(key: key);
 
   @override
@@ -31,11 +35,14 @@ class _MapScreenState extends State<MapScreen> {
   Position? _currentPosition;
   bool _isLoading = true;
   String _selectedFilter = 'all'; // 'all', 'lost', 'found'
+  
+  // Flag to track if screen needs refresh
+  bool _needsRefresh = false;
 
-  // Default map position (you can change this to your preferred location)
+  // Default map position centered on Punjab, India
   static const CameraPosition _initialPosition = CameraPosition(
-    target: LatLng(37.7749, -122.4194), // San Francisco
-    zoom: 12,
+    target: LatLng(30.8708161, 75.8037457), // Center of Punjab, India (Ludhiana)
+    zoom: 10,
   );
 
   @override
@@ -87,29 +94,9 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _fetchMapItems() async {
     try {
       print('🗺️ Fetching map items from Firestore...');
-
-      QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collection('posts')
-          .where('showOnMap', isEqualTo: true)
-          .get();
-
-      List<Map<String, dynamic>> items = [];
-
-      for (QueryDocumentSnapshot doc in snapshot.docs) {
-        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-        data['id'] = doc.id;
-
-        // Validate that item has location coordinates
-        if (data['location'] != null &&
-            data['location']['coordinates'] != null &&
-            data['location']['coordinates']['latitude'] != null &&
-            data['location']['coordinates']['longitude'] != null) {
-          items.add(data);
-          print('✅ Added item to map: ${data['title']} at ${data['location']['coordinates']['latitude']}, ${data['location']['coordinates']['longitude']}');
-        } else {
-          print('❌ Skipped item without coordinates: ${data['title']}');
-        }
-      }
+      
+      // Use the PostService to fetch posts
+      List<Map<String, dynamic>> items = await PostService.fetchPostsForMap();
 
       setState(() {
         _mapItems = items;
@@ -117,12 +104,23 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       print('🗺️ Loaded ${items.length} items for map display');
+      
+      // Recreate markers after fetching new data
+      await _createMarkers();
     } catch (e) {
       print('❌ Error fetching map items: $e');
       setState(() {
         _isLoading = false;
       });
     }
+  }
+  
+  // 🔄 REFRESH MAP DATA
+  Future<void> _refreshMapData() async {
+    setState(() {
+      _isLoading = true;
+    });
+    await _fetchMapItems();
   }
 
   // 🎯 CREATE CUSTOM MARKERS FOR DIFFERENT ITEM TYPES
@@ -137,8 +135,8 @@ class _MapScreenState extends State<MapScreen> {
 
       final coordinates = item['location']['coordinates'];
       final LatLng position = LatLng(
-        coordinates['latitude'].toDouble(),
-        coordinates['longitude'].toDouble(),
+        (coordinates['latitude'] is int) ? coordinates['latitude'].toDouble() : coordinates['latitude'],
+        (coordinates['longitude'] is int) ? coordinates['longitude'].toDouble() : coordinates['longitude'],
       );
 
       // Create custom marker based on item type
@@ -149,10 +147,10 @@ class _MapScreenState extends State<MapScreen> {
           markerId: MarkerId(item['id']),
           position: position,
           icon: markerIcon,
-          onTap: () => _onMarkerTapped(item, position),
+          onTap: () => _onMarkerTapped(item),
           infoWindow: InfoWindow(
-            title: item['title'] ?? 'Unknown Item',
-            snippet: '${item['type']?.toString().toUpperCase()} • ${item['category']}',
+            title: item['type']?.toString().toUpperCase() ?? 'ITEM', // Updated to show "LOST" or "FOUND"
+            snippet: item['title'] ?? 'Unknown Item', // Updated to show item title as snippet
           ),
         ),
       );
@@ -180,53 +178,133 @@ class _MapScreenState extends State<MapScreen> {
     print('🗺️ Created ${markers.length} markers on map');
   }
 
-  // 🎯 CREATE CUSTOM MARKER ICONS
+  // 🎯 CREATE CUSTOM MARKER ICONS - Modernized pins for Lost/Found
   Future<BitmapDescriptor> _createCustomMarker(Map<String, dynamic> item) async {
     final isLost = item['type']?.toString().toLowerCase() == 'lost';
     final Color markerColor = isLost ? Colors.red : Colors.green;
-    final IconData iconData = isLost ? Icons.search : Icons.check_circle;
-
-    return await _createMarkerFromIcon(iconData, markerColor);
+    
+    return await _createModernMarker(markerColor, isLost ? 'L' : 'F');
   }
-
-  Future<BitmapDescriptor> _createCurrentLocationMarker() async {
-    return await _createMarkerFromIcon(Icons.my_location, Colors.blue);
-  }
-
-  Future<BitmapDescriptor> _createMarkerFromIcon(IconData icon, Color color) async {
+  
+  // Create a modern pin marker with a letter (L/F) and color (Bigger size)
+  Future<BitmapDescriptor> _createModernMarker(Color color, String letter) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
-    const double size = 100.0;
+    const double size = 150.0; // Size of the marker
 
-    // Draw marker background circle
-    final Paint backgroundPaint = Paint()..color = color;
-    canvas.drawCircle(const Offset(size / 2, size / 2), size / 2, backgroundPaint);
-
-    // Draw white border
+    // Draw pin shape
+    final Paint pinPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    
     final Paint borderPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 6;
-    canvas.drawCircle(const Offset(size / 2, size / 2), size / 2 - 3, borderPaint);
+      ..strokeWidth = 3;
 
-    // Draw icon
+    // Pin top circle (positioned at the top third of the canvas)
+    final Offset circleCenter = Offset(size / 2, size / 3);
+    final double circleRadius = size / 3;
+    
+    canvas.drawCircle(circleCenter, circleRadius, pinPaint);
+    canvas.drawCircle(circleCenter, circleRadius, borderPaint);
+    
+    // Pin bottom triangle
+    final Path triangle = Path()
+      ..moveTo(size / 2, size / 3 * 2)
+      ..lineTo(size / 2 - size / 4, size - size / 6)
+      ..lineTo(size / 2 + size / 4, size - size / 6)
+      ..close();
+    
+    canvas.drawPath(triangle, pinPaint);
+    canvas.drawPath(triangle, borderPaint);
+    
+    // Draw letter (L for Lost, F for Found) - Centered in the circle
     final TextPainter textPainter = TextPainter(textDirection: TextDirection.ltr);
     textPainter.text = TextSpan(
-      text: String.fromCharCode(icon.codePoint),
-      style: TextStyle(
-        fontFamily: icon.fontFamily,
-        fontSize: 40,
+      text: letter,
+      style: const TextStyle(
+        fontFamily: 'Arial',
+        fontSize: 32,
         color: Colors.white,
+        fontWeight: FontWeight.bold,
       ),
     );
     textPainter.layout();
-    textPainter.paint(
-      canvas,
-      Offset(
-        (size - textPainter.width) / 2,
-        (size - textPainter.height) / 2,
+    
+    // Position text at the center of the circle
+    final Offset textPosition = Offset(
+      circleCenter.dx - textPainter.width / 2,  // Center horizontally
+      circleCenter.dy - textPainter.height / 2,  // Center vertically
+    );
+    
+    textPainter.paint(canvas, textPosition);
+
+    final ui.Picture picture = pictureRecorder.endRecording();
+    final ui.Image image = await picture.toImage(size.toInt(), size.toInt());
+    final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(byteData!.buffer.asUint8List());
+  }
+  
+  // Create marker for current location with "You" text (Bigger size)
+  Future<BitmapDescriptor> _createCurrentLocationMarker() async {
+    return await _createModernMarkerWithText(Colors.blue, 'You');
+  }
+  
+  // Modified version for "You" marker with text instead of single letter
+  Future<BitmapDescriptor> _createModernMarkerWithText(Color color, String text) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    const double size = 80.0; // Size of the marker
+
+    // Draw pin shape
+    final Paint pinPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    
+    final Paint borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+
+    // Pin top circle (positioned at the top third of the canvas)
+    final Offset circleCenter = Offset(size / 2, size / 3);
+    final double circleRadius = size / 3;
+    
+    canvas.drawCircle(circleCenter, circleRadius, pinPaint);
+    canvas.drawCircle(circleCenter, circleRadius, borderPaint);
+    
+    // Pin bottom triangle
+    final Path triangle = Path()
+      ..moveTo(size / 2, size / 3 * 2)
+      ..lineTo(size / 2 - size / 4, size - size / 6)
+      ..lineTo(size / 2 + size / 4, size - size / 6)
+      ..close();
+    
+    canvas.drawPath(triangle, pinPaint);
+    canvas.drawPath(triangle, borderPaint);
+    
+    // Draw text - Centered in the circle
+    final TextPainter textPainter = TextPainter(textDirection: TextDirection.ltr);
+    textPainter.text = TextSpan(
+      text: text,
+      style: const TextStyle(
+        fontFamily: 'Arial',
+        fontSize: 16,
+        color: Colors.white,
+        fontWeight: FontWeight.bold,
       ),
     );
+    textPainter.layout();
+    
+    // Position text at the center of the circle
+    final Offset textPosition = Offset(
+      circleCenter.dx - textPainter.width / 2,  // Center horizontally
+      circleCenter.dy - textPainter.height / 2,  // Center vertically
+    );
+    
+    textPainter.paint(canvas, textPosition);
 
     final ui.Picture picture = pictureRecorder.endRecording();
     final ui.Image image = await picture.toImage(size.toInt(), size.toInt());
@@ -235,161 +313,23 @@ class _MapScreenState extends State<MapScreen> {
     return BitmapDescriptor.fromBytes(byteData!.buffer.asUint8List());
   }
 
-  // 🎯 HANDLE MARKER TAP - SHOW CUSTOM INFO WINDOW
-  void _onMarkerTapped(Map<String, dynamic> item, LatLng position) {
-    _customInfoWindowController.addInfoWindow!(
-      _buildCustomInfoWindow(item),
-      position,
-    );
+  // Show all marker info windows by default
+  void _showAllMarkerInfoWindows() {
+    // This would normally show all info windows, but Google Maps doesn't support
+    // showing multiple info windows at once. Instead, we'll just ensure markers are created properly.
+    print('Markers created with info windows ready to show on tap');
   }
 
-  // 🎯 CUSTOM INFO WINDOW DESIGN
-  Widget _buildCustomInfoWindow(Map<String, dynamic> item) {
-    final isLost = item['type']?.toString().toLowerCase() == 'lost';
-
-    return Container(
-      width: 280,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header with color coding
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isLost ? Colors.red[600] : Colors.green[600],
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isLost ? Icons.search : Icons.check_circle,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    item['title'] ?? 'Unknown Item',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Content
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Category and Type badges
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[200],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        item['category'] ?? 'Other',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      item['type']?.toString().toUpperCase() ?? 'UNKNOWN',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: isLost ? Colors.red[600] : Colors.green[600],
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 8),
-
-                // Description
-                if (item['description']?.toString().isNotEmpty == true)
-                  Text(
-                    item['description'],
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[700],
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-
-                const SizedBox(height: 8),
-
-                // Location
-                if (item['location']?['address']?.toString().isNotEmpty == true)
-                  Row(
-                    children: [
-                      Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          item['location']['address'],
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                const SizedBox(height: 12),
-
-                // Action Button
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      _customInfoWindowController.hideInfoWindow!();
-                      widget.onItemSelected(item);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isLost ? Colors.red[600] : Colors.green[600],
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      isLost ? 'I Found This!' : 'This Is Mine!',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+  // 🎯 HANDLE MARKER TAP - OPEN POST DETAIL SCREEN
+  void _onMarkerTapped(Map<String, dynamic> item) {
+    // Hide any open info window
+    _customInfoWindowController.hideInfoWindow!();
+    
+    // Navigate to PostDetailScreen
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PostDetailScreen(post: item),
       ),
     );
   }
@@ -402,11 +342,21 @@ class _MapScreenState extends State<MapScreen> {
     _createMarkers();
     print('🔍 Applied filter: $filter');
   }
+  
+  // 🔄 PUBLIC METHOD TO REFRESH THE MAP
+  void refreshMap() {
+    _refreshMapData();
+  }
+  
+  // 🔄 METHOD TO FORCE REFRESH WITH IMMEDIATE DATA FETCH
+  Future<void> forceRefresh() async {
+    await _refreshMapData();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Stack(
         children: [
           // Google Map
@@ -426,6 +376,7 @@ class _MapScreenState extends State<MapScreen> {
               _mapController = controller;
               _customInfoWindowController.googleMapController = controller;
             },
+
             onTap: (LatLng position) {
               _customInfoWindowController.hideInfoWindow!();
             },
@@ -452,15 +403,15 @@ class _MapScreenState extends State<MapScreen> {
           if (_isLoading)
             Container(
               color: Colors.black.withOpacity(0.5),
-              child: const Center(
+              child: Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    CircularProgressIndicator(color: Colors.white),
-                    SizedBox(height: 16),
+                    CircularProgressIndicator(color: Theme.of(context).primaryColor),
+                    const SizedBox(height: 16),
                     Text(
                       'Loading map items...',
-                      style: TextStyle(color: Colors.white, fontSize: 16),
+                      style: TextStyle(color: Theme.of(context).colorScheme.onPrimary, fontSize: 16),
                     ),
                   ],
                 ),
@@ -473,8 +424,8 @@ class _MapScreenState extends State<MapScreen> {
             right: 20,
             child: FloatingActionButton(
               onPressed: _goToCurrentLocation,
-              backgroundColor: Colors.white,
-              child: const Icon(Icons.my_location, color: Color(0xFF667eea)),
+              backgroundColor: Theme.of(context).cardTheme.color,
+              child: Icon(Icons.my_location, color: Theme.of(context).primaryColor),
             ),
           ),
         ],
@@ -491,8 +442,8 @@ class _MapScreenState extends State<MapScreen> {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            const Color(0xFF667eea).withOpacity(0.9),
-            const Color(0xFF667eea).withOpacity(0.0),
+            Theme.of(context).primaryColor.withOpacity(0.9),
+            Theme.of(context).primaryColor.withOpacity(0.0),
           ],
         ),
       ),
@@ -504,10 +455,10 @@ class _MapScreenState extends State<MapScreen> {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
+                color: Theme.of(context).cardTheme.color?.withOpacity(0.9),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.chevron_left, color: Color(0xFF667eea), size: 24),
+              child: Icon(Icons.chevron_left, color: Theme.of(context).primaryColor, size: 24),
             ),
           ),
           const SizedBox(width: 16),
@@ -515,34 +466,34 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
+                color: Theme.of(context).cardTheme.color?.withOpacity(0.9),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.map, color: Color(0xFF667eea)),
+                  Icon(Icons.map, color: Theme.of(context).primaryColor),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Lost & Found Map',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF667eea),
+                        color: Theme.of(context).primaryColor,
                       ),
                     ),
                   ),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF667eea).withOpacity(0.1),
+                      color: Theme.of(context).primaryColor.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       '${_mapItems.length} items',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF667eea),
+                        color: Theme.of(context).primaryColor,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -563,7 +514,7 @@ class _MapScreenState extends State<MapScreen> {
       right: 20,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardTheme.color,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
@@ -601,7 +552,7 @@ class _MapScreenState extends State<MapScreen> {
             children: [
               Icon(
                 icon,
-                color: isSelected ? color : Colors.grey[600],
+                color: isSelected ? color : Theme.of(context).textTheme.bodyLarge?.color?.withOpacity(0.6),
                 size: 20,
               ),
               const SizedBox(height: 4),
@@ -610,7 +561,7 @@ class _MapScreenState extends State<MapScreen> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: isSelected ? color : Colors.grey[600],
+                  color: isSelected ? color : Theme.of(context).textTheme.bodyLarge?.color?.withOpacity(0.6),
                 ),
               ),
             ],
